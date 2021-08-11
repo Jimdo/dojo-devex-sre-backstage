@@ -1,0 +1,30 @@
+name: Dry run
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  dry_run:
+    name: Run dry run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+
+      - name: Install wl
+        run: make wl
+
+      - name: Execute dry run
+        run: ./setup.sh
+        env:
+          DRY_RUN: true
+          CONTINUE: true
+          TEAM: test-team
+          SERVICE_NAME: test-service
+          SLACK_CHANNEL: '#test-channel'
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}

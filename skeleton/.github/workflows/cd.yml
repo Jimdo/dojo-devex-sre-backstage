@@ -1,0 +1,141 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  apply_infrastructure_stage:
+    name: Apply stage infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+
+      - name: Set up AWS credentials
+        uses: hashicorp/vault-action@v2.1.2
+        with:
+          url: https://vault.jimdo-platform.net
+          method: github
+          githubToken: ${{ secrets.VAULT_ACTION_GITHUB_TOKEN }}
+          secrets: |
+            /aws-infra/sts/admin access_key | AWS_ACCESS_KEY_ID ;
+            /aws-infra/sts/admin secret_key | AWS_SECRET_ACCESS_KEY ;
+            /aws-infra/sts/admin security_token | AWS_SESSION_TOKEN ;
+
+      - name: Run infrastructure apply
+        run: make infrastructure-apply
+        env:
+          ENV: stage
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+
+  deploy_stage:
+    name: Deploy to stage
+    runs-on: ubuntu-latest
+    needs:
+      - apply_infrastructure_stage
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+      - name: Turnstyle
+        uses: softprops/turnstyle@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy
+        run: make deploy-without-pushing
+        env:
+          ENV: stage
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+
+  apply_infrastructure_prod:
+    name: Apply prod infrastructure
+    runs-on: ubuntu-latest
+    needs:
+      - deploy_stage
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+
+      - name: Set up AWS credentials
+        uses: hashicorp/vault-action@v2.1.2
+        with:
+          url: https://vault.jimdo-platform.net
+          method: github
+          githubToken: ${{ secrets.VAULT_ACTION_GITHUB_TOKEN }}
+          secrets: |
+            /aws-infra/sts/admin access_key | AWS_ACCESS_KEY_ID ;
+            /aws-infra/sts/admin secret_key | AWS_SECRET_ACCESS_KEY ;
+            /aws-infra/sts/admin security_token | AWS_SESSION_TOKEN ;
+
+      - name: Run infrastructure apply
+        run: make infrastructure-apply
+        env:
+          ENV: prod
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+
+
+  deploy_prod:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs:
+      - apply_infrastructure_prod
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+      - name: Turnstyle
+        uses: softprops/turnstyle@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy
+        run: make deploy-without-pushing
+        env:
+          ENV: prod
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+
+  publish_openapi_client:
+    name: Publishing OpenAPI Client
+    runs-on: ubuntu-latest
+    needs:
+      - deploy_prod
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+      - name: Imports secrets for openapi generator
+        id: secrets
+        uses: hashicorp/vault-action@v2.2.0
+        with:
+          url: https://vault.jimdo-platform.net
+          method: github
+          githubToken: ${{ secrets.VAULT_ACTION_GITHUB_TOKEN }}
+          secrets: |
+            secret/developers/openapi-generator-prod HTTP_BASIC_USER | OPENAPI_GENERATOR_USER ;
+            secret/developers/openapi-generator-prod HTTP_BASIC_PASS | OPENAPI_GENERATOR_PASSWORD ;
+      - name: Fetch service secrets
+        run: make secrets
+        env:
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+      - name: Start dependencies
+        run: docker-compose up -d
+      - name: Fetch OpenAPI specification
+        run: make generate-openapi-docs
+      - name: Publish OpenApi Client
+        run: |
+          curl --fail --silent --show-error --header "Content-Type: application/json" --request POST --data "$(cat specification.json | jq -R -c -s '{"specification": .}')" "https://${OPENAPI_GENERATOR_USER}:${OPENAPI_GENERATOR_PASSWORD}@openapi-generator-prod.jimdo-platform.net/clients/spring-boot-template/versions"
+
+  slack-workflow-status:
+    name: Post workflow status To Slack
+    needs:
+      - publish_openapi_client
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get correct branch name for status comparison
+        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+      - name: Slack workflow notification
+        uses: Gamesight/slack-workflow-status@master
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          channel: '#dev-bots'
+          name: 'spring-boot-template'

@@ -23,22 +23,25 @@ spec:
           title: Name
           type: string
           description: Unique name of the component
-        java_package_name:
-          title: Java Package Name
+        package_name:
+          title: Package Name
           type: string
-          description: Name for the java package. eg (io.backstage.blah)
+          description: Name for the kotlin package. eg (io.backstage.blah)
         description:
           title: Description
           type: string
           description: Help others understand what this website is for.
-        owner:
-          title: Owner
+        service_name:
+          title: Service name
           type: string
-          description: Owner of the component
-          ui:field: OwnerPicker
-          ui:options:
-            allowedKinds:
-              - Group
+        team:
+          title: Owner team
+          type: string
+          # description: Owner of the component
+          # ui:field: OwnerPicker
+          # ui:options:
+          #  allowedKinds:
+          #    - Group
     - title: Choose a location
       required:
         - repoUrl

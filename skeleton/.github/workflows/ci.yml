@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+
+      - name: Set up java
+        uses: actions/setup-java@v2
+        with:
+          distribution: 'adopt'
+          java-version: '11'
+
+      - name: Fetch service secrets
+        run: make secrets
+        env:
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+
+      - name: Run unit tests
+        run: make test
+
+  ktlint:
+    name: Run ktlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v1.1.0
+      - name: ktlint
+        uses: ScaCap/action-ktlint@master
+        with:
+          reporter: github-pr-review
+          github_token: ${{ secrets.github_token }}
+
+  build_docker_image:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+
+      - name: Build docker image
+        run: make build
+
+      - name: Fetch service secrets
+        run: make secrets
+        env:
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+
+      - name: Verify docker image
+        run: make verify-docker-image
+
+      - name: Push  docker image
+        if: github.ref == 'refs/heads/main'
+        run: make push-without-building
+        env:
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+
+  plan_infrastructure:
+    name: Plan infrastructure
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+          environment:
+            - stage
+            - prod
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+
+      - name: Set up AWS credentials
+        uses: hashicorp/vault-action@v2.1.2
+        with:
+          url: https://vault.jimdo-platform.net
+          method: github
+          githubToken: ${{ secrets.VAULT_ACTION_GITHUB_TOKEN }}
+          secrets: |
+            /aws-infra/sts/admin access_key | AWS_ACCESS_KEY_ID ;
+            /aws-infra/sts/admin secret_key | AWS_SECRET_ACCESS_KEY ;
+            /aws-infra/sts/admin security_token | AWS_SESSION_TOKEN ;
+
+      - name: Run infrastructure plan
+        run: make infrastructure-plan
+        env:
+          ENV: ${{matrix.environment}}
+
+  generate_openapi_specification:
+    name: Generate OpenAPI specification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+      - name: Fetch service secrets
+        run: make secrets
+        env:
+          WONDERLAND_GITHUB_TOKEN: ${{ secrets.WONDERLAND_GITHUB_TOKEN }}
+      - name: Start dependencies
+        run: docker-compose up -d
+      - name: Fetch OpenAPI specification
+        run: make generate-openapi-docs
+
+  create_release:
+    name: Create release
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - build_docker_image
+      - plan_infrastructure
+      - generate_openapi_specification
+      - test
+      - ktlint
+    steps:
+      - name: Turnstyle
+        uses: softprops/turnstyle@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check out code
+        uses: actions/checkout@v2.3.4
+        with:
+          fetch-depth: 0
+      - name: Determine if on tag
+        id: on_tag
+        run: |
+          ON_TAG=$(git describe --exact-match --tags HEAD 2>&1 || true)
+          if [[ "${ON_TAG}" =~ "no tag exactly matches" ]]; then
+            echo "::set-output name=on_tag::no"
+          else
+            echo "::set-output name=on_tag::yes"
+          fi
+      - name: Create Release
+        if: steps.on_tag.outputs.on_tag == 'no'
+        id: create_release
+        uses: zendesk/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.DEPLOYMENT_GITHUB_TOKEN }}
+        with:
+          auto_increment_type: major
+
+  slack-workflow-status:
+    name: Post workflow status To Slack
+    needs:
+      - create_release
+
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get correct branch name for status comparison
+        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+      - name: Determine if we need to notify
+        uses: Jimdo/should-i-notify-action@main
+        id: should_notify
+        with:
+          branch: ${{ env.BRANCH_NAME }}
+          needs_context: ${{ toJson(needs) }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Slack workflow notification
+        uses: Gamesight/slack-workflow-status@master
+        if: steps.should_notify.outputs.should_send_message == 'yes' && github.ref == 'refs/heads/main'
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          channel: '#dev-bots'
+          name: 'spring-boot-template'

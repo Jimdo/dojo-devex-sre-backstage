@@ -1,0 +1,46 @@
+management:
+  endpoint:
+    metrics:
+      enabled: true
+  endpoints:
+    web:
+      base-path: "/"
+      path-mapping:
+        prometheus: metrics
+        metrics: spring-metrics
+        actuator: actuator
+      exposure:
+        include: health, prometheus
+  server:
+    port: 8081
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: jdbc:postgresql://${DATABASE_ENDPOINT}:${DATABASE_PORT}/${DATABASE_NAME}
+    username: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+  jpa:
+    database: POSTGRESQL
+    generate-ddl: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc:
+          lob:
+            non_contextual_creation: true
+  application:
+    name: spring-boot-template
+authentication:
+  api:
+    user: ${API_USER}
+    token: ${API_TOKEN}
+  docs:
+    user: ${DOCS_USER}
+    password: ${DOCS_PASSWORD}
+springdoc:
+  swagger-ui:
+    path: /docs/swagger-ui.html
+  api-docs:
+    path: /docs/api-docs

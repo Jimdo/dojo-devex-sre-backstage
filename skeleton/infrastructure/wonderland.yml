@@ -1,0 +1,37 @@
+components:
+  - name: app
+    image: {{ env `IMAGE` }}:{{ env `VERSION` }}
+    capacity:
+      memory: L
+      cpu: M
+    env:
+      OTEL_RESOURCE_ATTRIBUTES: service.name={{ env `SERVICE_NAME` }},deployment.environment={{ env `ENV` }}
+      $ref_secrets: vault+secret://vault.jimdo-platform.net/{{ env `VAULT` }}
+    logging:
+      types:
+        - json
+endpoint:
+  component: app
+  domain: {{ env `SERVICE_NAME` }}-{{ env `ENV` }}.jimdo-platform.net
+  port: 8080
+  load-balancer:
+    private: true
+    healthcheck:
+      path: /health
+      protocol: HTTP
+      container-port: 8081
+metrics:
+  prometheus:
+    - component: app
+      container-port: 8081
+  {{if eq (env `ENV`) "prod"}}
+auto-scaling:
+  enabled: true
+  target-cpu-utilization: 70
+  cooldown-scale-down: 300
+  cooldown-scale-up: 120
+  min-instances: 2
+  max-instances: 10
+  {{end}}
+notifications:
+  slack: "#dev-bots"

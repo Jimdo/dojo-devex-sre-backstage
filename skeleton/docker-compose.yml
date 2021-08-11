@@ -1,0 +1,13 @@
+version: '3.1'
+
+services:
+  database:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: template_dev
+    volumes:
+      - ./tmp/postgresql:/var/lib/postgresql
+    ports:
+      - 5432:5432
